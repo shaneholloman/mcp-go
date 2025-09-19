@@ -985,10 +985,10 @@ func TestStreamableHTTP_PongResponseHandling(t *testing.T) {
 
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("Expected status 200 for response with empty error, got %d. Body: %s", resp.StatusCode, bodyStr)
- 		}
+		}
 	})
 }
-      
+
 func TestStreamableHTTPServer_TLS(t *testing.T) {
 	t.Run("TLS options are set correctly", func(t *testing.T) {
 		mcpServer := NewMCPServer("test-mcp-server", "1.0.0")
