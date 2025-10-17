@@ -590,6 +590,135 @@ func TestStreamableHTTP_HttpHandler(t *testing.T) {
 	})
 }
 
+func TestStreamableHttpResourceGet(t *testing.T) {
+	s := NewMCPServer("test-mcp-server", "1.0", WithResourceCapabilities(true, true))
+
+	testServer := NewTestStreamableHTTPServer(
+		s,
+		WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
+			session := ClientSessionFromContext(ctx)
+
+			if st, ok := session.(SessionWithResources); ok {
+				if _, ok := st.GetSessionResources()["file://test_resource"]; !ok {
+					st.SetSessionResources(map[string]ServerResource{
+						"file://test_resource": ServerResource{
+							Resource: mcp.Resource{
+								URI:         "file://test_resource",
+								Name:        "test_resource",
+								Description: "A test resource",
+								MIMEType:    "text/plain",
+							},
+							Handler: func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+								return []mcp.ResourceContents{
+									mcp.TextResourceContents{
+										URI:      "file://test_resource",
+										Text:     "test content",
+										MIMEType: "text/plain",
+									},
+								}, nil
+							},
+						},
+					})
+				}
+			} else {
+				t.Error("Session does not support tools/resources")
+			}
+
+			return ctx
+		}),
+	)
+
+	var sessionID string
+
+	// Initialize session
+	resp, err := postJSON(testServer.URL, initRequest)
+	if err != nil {
+		t.Fatalf("Failed to send initialize request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", resp.StatusCode)
+	}
+
+	sessionID = resp.Header.Get(HeaderKeySessionID)
+	if sessionID == "" {
+		t.Fatal("Expected session id in header")
+	}
+
+	// List resources
+	listResourcesRequest := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "resources/list",
+		"params":  map[string]any{},
+	}
+	resp, err = postSessionJSON(testServer.URL, sessionID, listResourcesRequest)
+	if err != nil {
+		t.Fatalf("Failed to send list resources request: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", resp.StatusCode)
+	}
+
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	var listResponse jsonRPCResponse
+	if err := json.Unmarshal(bodyBytes, &listResponse); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+
+	items, ok := listResponse.Result["resources"].([]any)
+	if !ok {
+		t.Fatal("Expected resources array in response")
+	}
+	if len(items) != 1 {
+		t.Fatalf("Expected 1 resource, got %d", len(items))
+	}
+	imap, ok := items[0].(map[string]any)
+	if !ok {
+		t.Fatal("Expected resource to be a map")
+	}
+	if imap["uri"] != "file://test_resource" {
+		t.Errorf("Expected resource URI file://test_resource, got %v", imap["uri"])
+	}
+
+	// List resources
+	getResourceRequest := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "resources/read",
+		"params":  map[string]any{"uri": "file://test_resource"},
+	}
+	resp, err = postSessionJSON(testServer.URL, sessionID, getResourceRequest)
+	if err != nil {
+		t.Fatalf("Failed to send list resources request: %v", err)
+	}
+
+	bodyBytes, _ = io.ReadAll(resp.Body)
+	var readResponse jsonRPCResponse
+	if err := json.Unmarshal(bodyBytes, &readResponse); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+
+	contents, ok := readResponse.Result["contents"].([]any)
+	if !ok {
+		t.Fatal("Expected contents array in response")
+	}
+	if len(contents) != 1 {
+		t.Fatalf("Expected 1 content, got %d", len(contents))
+	}
+
+	cmap, ok := contents[0].(map[string]any)
+	if !ok {
+		t.Fatal("Expected content to be a map")
+	}
+	if cmap["uri"] != "file://test_resource" {
+		t.Errorf("Expected content URI file://test_resource, got %v", cmap["uri"])
+	}
+
+}
+
 func TestStreamableHTTP_SessionWithTools(t *testing.T) {
 
 	t.Run("SessionWithTools implementation", func(t *testing.T) {
@@ -719,6 +848,141 @@ func TestStreamableHTTP_SessionWithTools(t *testing.T) {
 		}
 		if _, exists := retrievedTools["final_tool"]; !exists {
 			t.Error("Expected final_tool to exist")
+		}
+	})
+}
+
+func TestStreamableHTTP_SessionWithResources(t *testing.T) {
+
+	t.Run("SessionWithResources implementation", func(t *testing.T) {
+		// Create hooks to track sessions
+		hooks := &Hooks{}
+		var registeredSession *streamableHttpSession
+		var mu sync.Mutex
+		var sessionRegistered sync.WaitGroup
+		sessionRegistered.Add(1)
+
+		hooks.AddOnRegisterSession(func(ctx context.Context, session ClientSession) {
+			if s, ok := session.(*streamableHttpSession); ok {
+				mu.Lock()
+				registeredSession = s
+				mu.Unlock()
+				sessionRegistered.Done()
+			}
+		})
+
+		mcpServer := NewMCPServer("test", "1.0.0", WithHooks(hooks))
+		testServer := NewTestStreamableHTTPServer(mcpServer)
+		defer testServer.Close()
+
+		// send initialize request to trigger the session registration
+		resp, err := postJSON(testServer.URL, initRequest)
+		if err != nil {
+			t.Fatalf("Failed to send message: %v", err)
+		}
+		defer resp.Body.Close()
+
+		// Watch the notification to ensure the session is registered
+		// (Normal http request (post) will not trigger the session registration)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		go func() {
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, testServer.URL, nil)
+			req.Header.Set("Content-Type", "text/event-stream")
+			getResp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				fmt.Printf("Failed to get: %v\n", err)
+				return
+			}
+			defer getResp.Body.Close()
+		}()
+
+		// Verify we got a session
+		sessionRegistered.Wait()
+		mu.Lock()
+		if registeredSession == nil {
+			mu.Unlock()
+			t.Fatal("Session was not registered via hook")
+		}
+		mu.Unlock()
+
+		// Test setting and getting resources
+		resources := map[string]ServerResource{
+			"test_resource": {
+				Resource: mcp.Resource{
+					URI:         "file://test_resource",
+					Name:        "test_resource",
+					Description: "A test resource",
+					MIMEType:    "text/plain",
+				},
+				Handler: func(ctx context.Context, request mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+					return []mcp.ResourceContents{
+						mcp.TextResourceContents{
+							URI:  "file://test_resource",
+							Text: "test content",
+						},
+					}, nil
+				},
+			},
+		}
+
+		// Test SetSessionResources
+		registeredSession.SetSessionResources(resources)
+
+		// Test GetSessionResources
+		retrievedResources := registeredSession.GetSessionResources()
+		if len(retrievedResources) != 1 {
+			t.Errorf("Expected 1 resource, got %d", len(retrievedResources))
+		}
+		if resource, exists := retrievedResources["test_resource"]; !exists {
+			t.Error("Expected test_resource to exist")
+		} else if resource.Resource.Name != "test_resource" {
+			t.Errorf("Expected resource name test_resource, got %s", resource.Resource.Name)
+		}
+
+		// Test concurrent access
+		var wg sync.WaitGroup
+		for i := 0; i < 10; i++ {
+			wg.Add(2)
+			go func(i int) {
+				defer wg.Done()
+				resources := map[string]ServerResource{
+					fmt.Sprintf("resource_%d", i): {
+						Resource: mcp.Resource{
+							URI:         fmt.Sprintf("file://resource_%d", i),
+							Name:        fmt.Sprintf("resource_%d", i),
+							Description: fmt.Sprintf("Resource %d", i),
+							MIMEType:    "text/plain",
+						},
+					},
+				}
+				registeredSession.SetSessionResources(resources)
+			}(i)
+			go func() {
+				defer wg.Done()
+				_ = registeredSession.GetSessionResources()
+			}()
+		}
+		wg.Wait()
+
+		// Verify we can still get and set resources after concurrent access
+		finalResources := map[string]ServerResource{
+			"final_resource": {
+				Resource: mcp.Resource{
+					URI:         "file://final_resource",
+					Name:        "final_resource",
+					Description: "Final Resource",
+					MIMEType:    "text/plain",
+				},
+			},
+		}
+		registeredSession.SetSessionResources(finalResources)
+		retrievedResources = registeredSession.GetSessionResources()
+		if len(retrievedResources) != 1 {
+			t.Errorf("Expected 1 resource, got %d", len(retrievedResources))
+		}
+		if _, exists := retrievedResources["final_resource"]; !exists {
+			t.Error("Expected final_resource to exist")
 		}
 	})
 }
@@ -1013,6 +1277,14 @@ func postJSON(url string, bodyObject any) (*http.Response, error) {
 	jsonBody, _ := json.Marshal(bodyObject)
 	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
+	return http.DefaultClient.Do(req)
+}
+
+func postSessionJSON(url, session string, bodyObject any) (*http.Response, error) {
+	jsonBody, _ := json.Marshal(bodyObject)
+	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(HeaderKeySessionID, session)
 	return http.DefaultClient.Do(req)
 }
 
