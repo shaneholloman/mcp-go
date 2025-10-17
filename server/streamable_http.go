@@ -72,6 +72,16 @@ func WithHeartbeatInterval(interval time.Duration) StreamableHTTPOption {
 	}
 }
 
+// WithDisableStreaming prevents the server from responding to GET requests with
+// a streaming response. Instead, it will respond with a 405 Method Not Allowed status.
+// This can be useful in scenarios where streaming is not desired or supported.
+// The default is false, meaning streaming is enabled.
+func WithDisableStreaming(disable bool) StreamableHTTPOption {
+	return func(s *StreamableHTTPServer) {
+		s.disableStreaming = disable
+	}
+}
+
 // WithHTTPContextFunc sets a function that will be called to customise the context
 // to the server using the incoming request.
 // This can be used to inject context values from headers, for example.
@@ -145,6 +155,7 @@ type StreamableHTTPServer struct {
 	listenHeartbeatInterval time.Duration
 	logger                  util.Logger
 	sessionLogLevels        *sessionLogLevelsStore
+	disableStreaming        bool
 
 	tlsCertFile string
 	tlsKeyFile  string
@@ -451,6 +462,11 @@ func (s *StreamableHTTPServer) handlePost(w http.ResponseWriter, r *http.Request
 func (s *StreamableHTTPServer) handleGet(w http.ResponseWriter, r *http.Request) {
 	// get request is for listening to notifications
 	// https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#listening-for-messages-from-the-server
+	if s.disableStreaming {
+		s.logger.Infof("Rejected GET request: streaming is disabled (session: %s)", r.Header.Get(HeaderKeySessionID))
+		http.Error(w, "Streaming is disabled on this server", http.StatusMethodNotAllowed)
+		return
+	}
 
 	sessionID := r.Header.Get(HeaderKeySessionID)
 	// the specification didn't say we should validate the session id
