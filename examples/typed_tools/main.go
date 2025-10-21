@@ -22,7 +22,7 @@ type GreetingArgs struct {
 }
 
 // main starts the MCP-based example server, registers a typed "greeting" tool, and serves it over standard I/O.
-// 
+//
 // The registered tool exposes a schema for typed inputs (name, age, is_vip, languages, metadata, and any_data)
 // and uses a typed handler to produce personalized greetings. If the server fails to start, an error is printed to stdout.
 func main() {
