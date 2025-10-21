@@ -1091,8 +1091,10 @@ func WithObject(name string, opts ...PropertyOption) ToolOption {
 	}
 }
 
-// WithArray adds an array property to the tool schema.
-// It accepts property options to configure the array property's behavior and constraints.
+// WithArray returns a ToolOption that adds an array-typed property with the given name to a Tool's input schema.
+// It applies provided PropertyOption functions to configure the property's schema, moves a `required` flag
+// from the property schema into the Tool's InputSchema.Required slice when present, and registers the resulting
+// schema under InputSchema.Properties[name].
 func WithArray(name string, opts ...PropertyOption) ToolOption {
 	return func(t *Tool) {
 		schema := map[string]any{
@@ -1113,8 +1115,9 @@ func WithArray(name string, opts ...PropertyOption) ToolOption {
 	}
 }
 
-// WithAny adds a property of any type to the tool schema.
-// It accepts property options to configure the property's behavior and constraints.
+// WithAny adds an input property named name with no predefined JSON Schema type to the Tool's input schema.
+// The returned ToolOption applies the provided PropertyOption functions to the property's schema, moves a property-level
+// `required` flag into the Tool's InputSchema.Required list if present, and stores the resulting schema under InputSchema.Properties[name].
 func WithAny(name string, opts ...PropertyOption) ToolOption {
 	return func(t *Tool) {
 		schema := map[string]any{}
@@ -1133,7 +1136,8 @@ func WithAny(name string, opts ...PropertyOption) ToolOption {
 	}
 }
 
-// Properties defines the properties for an object schema
+// Properties sets the "properties" map for an object schema.
+// The returned PropertyOption stores the provided map under the schema's "properties" key.
 func Properties(props map[string]any) PropertyOption {
 	return func(schema map[string]any) {
 		schema["properties"] = props
