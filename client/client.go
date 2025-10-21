@@ -154,7 +154,7 @@ func (c *Client) sendRequest(
 		ID:      mcp.NewRequestId(id),
 		Method:  method,
 		Params:  params,
-		Header: header,
+		Header:  header,
 	}
 
 	response, err := c.transport.SendRequest(ctx, request)
