@@ -41,23 +41,41 @@ func WithEndpointPath(endpointPath string) StreamableHTTPOption {
 // as a new session. No session id returned to the client.
 // The default is false.
 //
-// Notice: This is a convenience method. It's identical to set WithSessionIdManager option
+// Note: This is a convenience method. It's identical to set WithSessionIdManager option
 // to StatelessSessionIdManager.
 func WithStateLess(stateLess bool) StreamableHTTPOption {
 	return func(s *StreamableHTTPServer) {
 		if stateLess {
-			s.sessionIdManager = &StatelessSessionIdManager{}
+			s.sessionIdManagerResolver = NewDefaultSessionIdManagerResolver(&StatelessSessionIdManager{})
 		}
 	}
 }
 
 // WithSessionIdManager sets a custom session id generator for the server.
-// By default, the server will use SimpleStatefulSessionIdGenerator, which generates
-// session ids with uuid, and it's insecure.
-// Notice: it will override the WithStateLess option.
+// By default, the server uses InsecureStatefulSessionIdManager (UUID-based; insecure).
+// Note: Options are applied in order; the last one wins. If combined with
+// WithStateLess or WithSessionIdManagerResolver, whichever is applied last takes effect.
 func WithSessionIdManager(manager SessionIdManager) StreamableHTTPOption {
 	return func(s *StreamableHTTPServer) {
-		s.sessionIdManager = manager
+		if manager == nil {
+			s.sessionIdManagerResolver = NewDefaultSessionIdManagerResolver(&InsecureStatefulSessionIdManager{})
+			return
+		}
+		s.sessionIdManagerResolver = NewDefaultSessionIdManagerResolver(manager)
+	}
+}
+
+// WithSessionIdManagerResolver sets a custom session id manager resolver for the server.
+// This allows for request-based session id management strategies.
+// Note: Options are applied in order; the last one wins. If combined with
+// WithStateLess or WithSessionIdManager, whichever is applied last takes effect.
+func WithSessionIdManagerResolver(resolver SessionIdManagerResolver) StreamableHTTPOption {
+	return func(s *StreamableHTTPServer) {
+		if resolver == nil {
+			s.sessionIdManagerResolver = NewDefaultSessionIdManagerResolver(&InsecureStatefulSessionIdManager{})
+			return
+		}
+		s.sessionIdManagerResolver = resolver
 	}
 }
 
@@ -150,13 +168,13 @@ type StreamableHTTPServer struct {
 	httpServer *http.Server
 	mu         sync.RWMutex
 
-	endpointPath            string
-	contextFunc             HTTPContextFunc
-	sessionIdManager        SessionIdManager
-	listenHeartbeatInterval time.Duration
-	logger                  util.Logger
-	sessionLogLevels        *sessionLogLevelsStore
-	disableStreaming        bool
+	endpointPath             string
+	contextFunc              HTTPContextFunc
+	sessionIdManagerResolver SessionIdManagerResolver
+	listenHeartbeatInterval  time.Duration
+	logger                   util.Logger
+	sessionLogLevels         *sessionLogLevelsStore
+	disableStreaming         bool
 
 	tlsCertFile string
 	tlsKeyFile  string
@@ -169,7 +187,7 @@ func NewStreamableHTTPServer(server *MCPServer, opts ...StreamableHTTPOption) *S
 		sessionTools:             newSessionToolsStore(),
 		sessionLogLevels:         newSessionLogLevelsStore(),
 		endpointPath:             "/mcp",
-		sessionIdManager:         &InsecureStatefulSessionIdManager{},
+		sessionIdManagerResolver: NewDefaultSessionIdManagerResolver(&InsecureStatefulSessionIdManager{}),
 		logger:                   util.DefaultLogger(),
 		sessionResources:         newSessionResourcesStore(),
 		sessionResourceTemplates: newSessionResourceTemplatesStore(),
@@ -307,14 +325,15 @@ func (s *StreamableHTTPServer) handlePost(w http.ResponseWriter, r *http.Request
 	// The session is ephemeral. Its life is the same as the request. It's only created
 	// for interaction with the mcp server.
 	var sessionID string
+	sessionIdManager := s.sessionIdManagerResolver.ResolveSessionIdManager(r)
 	if isInitializeRequest {
 		// generate a new one for initialize request
-		sessionID = s.sessionIdManager.Generate()
+		sessionID = sessionIdManager.Generate()
 	} else {
 		// Get session ID from header.
 		// Stateful servers need the client to carry the session ID.
 		sessionID = r.Header.Get(HeaderKeySessionID)
-		isTerminated, err := s.sessionIdManager.Validate(sessionID)
+		isTerminated, err := sessionIdManager.Validate(sessionID)
 		if err != nil {
 			http.Error(w, "Invalid session ID", http.StatusBadRequest)
 			return
@@ -611,7 +630,8 @@ func (s *StreamableHTTPServer) handleGet(w http.ResponseWriter, r *http.Request)
 func (s *StreamableHTTPServer) handleDelete(w http.ResponseWriter, r *http.Request) {
 	// delete request terminate the session
 	sessionID := r.Header.Get(HeaderKeySessionID)
-	notAllowed, err := s.sessionIdManager.Terminate(sessionID)
+	sessionIdManager := s.sessionIdManagerResolver.ResolveSessionIdManager(r)
+	notAllowed, err := sessionIdManager.Terminate(sessionID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Session termination failed: %v", err), http.StatusInternalServerError)
 		return
@@ -659,7 +679,8 @@ func (s *StreamableHTTPServer) handleSamplingResponse(w http.ResponseWriter, r *
 	}
 
 	// Validate session
-	isTerminated, err := s.sessionIdManager.Validate(sessionID)
+	sessionIdManager := s.sessionIdManagerResolver.ResolveSessionIdManager(r)
+	isTerminated, err := sessionIdManager.Validate(sessionID)
 	if err != nil {
 		http.Error(w, "Invalid session ID", http.StatusBadRequest)
 		return err
@@ -1128,6 +1149,11 @@ var _ SessionWithElicitation = (*streamableHttpSession)(nil)
 
 // --- session id manager ---
 
+// SessionIdManagerResolver resolves a SessionIdManager based on the HTTP request
+type SessionIdManagerResolver interface {
+	ResolveSessionIdManager(r *http.Request) SessionIdManager
+}
+
 type SessionIdManager interface {
 	Generate() string
 	// Validate checks if a session ID is valid and not terminated.
@@ -1138,6 +1164,24 @@ type SessionIdManager interface {
 	// Returns isNotAllowed=true if the server policy prevents client termination.
 	// Returns err!=nil if the ID is invalid or termination failed.
 	Terminate(sessionID string) (isNotAllowed bool, err error)
+}
+
+// DefaultSessionIdManagerResolver is a simple resolver that returns the same SessionIdManager for all requests
+type DefaultSessionIdManagerResolver struct {
+	manager SessionIdManager
+}
+
+// NewDefaultSessionIdManagerResolver creates a new DefaultSessionIdManagerResolver with the given SessionIdManager
+func NewDefaultSessionIdManagerResolver(manager SessionIdManager) *DefaultSessionIdManagerResolver {
+	if manager == nil {
+		manager = &InsecureStatefulSessionIdManager{}
+	}
+	return &DefaultSessionIdManagerResolver{manager: manager}
+}
+
+// ResolveSessionIdManager returns the configured SessionIdManager for all requests
+func (r *DefaultSessionIdManagerResolver) ResolveSessionIdManager(_ *http.Request) SessionIdManager {
+	return r.manager
 }
 
 // StatelessSessionIdManager does nothing, which means it has no session management, which is stateless.
