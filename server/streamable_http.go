@@ -52,13 +52,13 @@ func WithStateLess(stateLess bool) StreamableHTTPOption {
 }
 
 // WithSessionIdManager sets a custom session id generator for the server.
-// By default, the server uses InsecureStatefulSessionIdManager (UUID-based; insecure).
+// By default, the server uses StatelessGeneratingSessionIdManager (generates IDs but no local validation).
 // Note: Options are applied in order; the last one wins. If combined with
 // WithStateLess or WithSessionIdManagerResolver, whichever is applied last takes effect.
 func WithSessionIdManager(manager SessionIdManager) StreamableHTTPOption {
 	return func(s *StreamableHTTPServer) {
 		if manager == nil {
-			s.sessionIdManagerResolver = NewDefaultSessionIdManagerResolver(&InsecureStatefulSessionIdManager{})
+			s.sessionIdManagerResolver = NewDefaultSessionIdManagerResolver(&StatelessSessionIdManager{})
 			return
 		}
 		s.sessionIdManagerResolver = NewDefaultSessionIdManagerResolver(manager)
@@ -72,10 +72,20 @@ func WithSessionIdManager(manager SessionIdManager) StreamableHTTPOption {
 func WithSessionIdManagerResolver(resolver SessionIdManagerResolver) StreamableHTTPOption {
 	return func(s *StreamableHTTPServer) {
 		if resolver == nil {
-			s.sessionIdManagerResolver = NewDefaultSessionIdManagerResolver(&InsecureStatefulSessionIdManager{})
+			s.sessionIdManagerResolver = NewDefaultSessionIdManagerResolver(&StatelessSessionIdManager{})
 			return
 		}
 		s.sessionIdManagerResolver = resolver
+	}
+}
+
+// WithStateful enables stateful session management using InsecureStatefulSessionIdManager.
+// This requires sticky sessions in multi-instance deployments.
+func WithStateful(stateful bool) StreamableHTTPOption {
+	return func(s *StreamableHTTPServer) {
+		if stateful {
+			s.sessionIdManagerResolver = NewDefaultSessionIdManagerResolver(&InsecureStatefulSessionIdManager{})
+		}
 	}
 }
 
@@ -187,7 +197,7 @@ func NewStreamableHTTPServer(server *MCPServer, opts ...StreamableHTTPOption) *S
 		sessionTools:             newSessionToolsStore(),
 		sessionLogLevels:         newSessionLogLevelsStore(),
 		endpointPath:             "/mcp",
-		sessionIdManagerResolver: NewDefaultSessionIdManagerResolver(&InsecureStatefulSessionIdManager{}),
+		sessionIdManagerResolver: NewDefaultSessionIdManagerResolver(&StatelessGeneratingSessionIdManager{}),
 		logger:                   util.DefaultLogger(),
 		sessionResources:         newSessionResourcesStore(),
 		sessionResourceTemplates: newSessionResourceTemplatesStore(),
@@ -1244,7 +1254,7 @@ type DefaultSessionIdManagerResolver struct {
 // NewDefaultSessionIdManagerResolver creates a new DefaultSessionIdManagerResolver with the given SessionIdManager
 func NewDefaultSessionIdManagerResolver(manager SessionIdManager) *DefaultSessionIdManagerResolver {
 	if manager == nil {
-		manager = &InsecureStatefulSessionIdManager{}
+		manager = &StatelessSessionIdManager{}
 	}
 	return &DefaultSessionIdManagerResolver{manager: manager}
 }
@@ -1267,6 +1277,30 @@ func (s *StatelessSessionIdManager) Validate(sessionID string) (isTerminated boo
 }
 
 func (s *StatelessSessionIdManager) Terminate(sessionID string) (isNotAllowed bool, err error) {
+	return false, nil
+}
+
+// StatelessGeneratingSessionIdManager generates session IDs but doesn't validate them locally.
+// This allows session IDs to be generated for clients while working across multiple instances.
+type StatelessGeneratingSessionIdManager struct{}
+
+func (s *StatelessGeneratingSessionIdManager) Generate() string {
+	return idPrefix + uuid.New().String()
+}
+
+func (s *StatelessGeneratingSessionIdManager) Validate(sessionID string) (isTerminated bool, err error) {
+	// Only validate format, not existence - allows cross-instance operation
+	if !strings.HasPrefix(sessionID, idPrefix) {
+		return false, fmt.Errorf("invalid session id: %s", sessionID)
+	}
+	if _, err := uuid.Parse(sessionID[len(idPrefix):]); err != nil {
+		return false, fmt.Errorf("invalid session id: %s", sessionID)
+	}
+	return false, nil
+}
+
+func (s *StatelessGeneratingSessionIdManager) Terminate(sessionID string) (isNotAllowed bool, err error) {
+	// No-op termination since we don't track sessions
 	return false, nil
 }
 
