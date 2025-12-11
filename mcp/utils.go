@@ -542,7 +542,11 @@ func ParseAnnotations(data map[string]any) *Annotations {
 	}
 	annotations := &Annotations{}
 	if value, ok := data["priority"]; ok {
-		annotations.Priority = cast.ToFloat64(value)
+		if value != nil {
+			if priority, err := cast.ToFloat64E(value); err == nil {
+				annotations.Priority = &priority
+			}
+		}
 	}
 
 	if value, ok := data["audience"]; ok {
@@ -551,6 +555,12 @@ func ParseAnnotations(data map[string]any) *Annotations {
 			if a == RoleUser || a == RoleAssistant {
 				annotations.Audience = append(annotations.Audience, a)
 			}
+		}
+	}
+
+	if value, ok := data["lastModified"]; ok {
+		if str, ok := value.(string); ok {
+			annotations.LastModified = str
 		}
 	}
 	return annotations
