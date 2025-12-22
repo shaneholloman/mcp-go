@@ -168,3 +168,65 @@ func TestErrorChaining(t *testing.T) {
 	// But the original error should
 	require.True(t, errors.Is(err, ErrMethodNotFound))
 }
+
+func TestURLElicitationRequiredError(t *testing.T) {
+	t.Parallel()
+
+	err := URLElicitationRequiredError{
+		Elicitations: []ElicitationParams{
+			{
+				Mode:          ElicitationModeURL,
+				ElicitationID: "123",
+				URL:           "https://example.com/auth",
+				Message:       "Auth required",
+			},
+		},
+	}
+
+	// Test Error() string
+	expectedMsg := "URL elicitation required: 1 elicitation(s) needed"
+	require.Equal(t, expectedMsg, err.Error())
+
+	// Test JSONRPCError conversion
+	jsonRPCError := err.JSONRPCError()
+	require.Equal(t, URL_ELICITATION_REQUIRED, jsonRPCError.Error.Code)
+	require.Equal(t, expectedMsg, jsonRPCError.Error.Message)
+	
+	dataMap, ok := jsonRPCError.Error.Data.(map[string]any)
+	require.True(t, ok, "Expected Data to be map[string]any")
+	
+	elicitations, ok := dataMap["elicitations"].([]ElicitationParams)
+	require.True(t, ok, "Expected elicitations in Data")
+	
+	require.Equal(t, 1, len(elicitations))
+	require.Equal(t, "123", elicitations[0].ElicitationID)
+}
+
+func TestJSONRPCErrorDetails_AsError_URLElicitationRequired(t *testing.T) {
+	t.Parallel()
+
+	elicitations := []ElicitationParams{
+		{
+			Mode:          ElicitationModeURL,
+			ElicitationID: "123",
+			URL:           "https://example.com/auth",
+		},
+	}
+
+	details := &JSONRPCErrorDetails{
+		Code:    URL_ELICITATION_REQUIRED,
+		Message: "URL elicitation required...",
+		Data: map[string]any{
+			"elicitations": elicitations,
+		},
+	}
+
+	err := details.AsError()
+	require.Error(t, err)
+
+	var urlErr URLElicitationRequiredError
+	require.True(t, errors.As(err, &urlErr), "Expected error to be URLElicitationRequiredError")
+	require.Equal(t, 1, len(urlErr.Elicitations))
+	require.Equal(t, "123", urlErr.Elicitations[0].ElicitationID)
+	require.Equal(t, "https://example.com/auth", urlErr.Elicitations[0].URL)
+}

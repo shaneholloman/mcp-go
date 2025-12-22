@@ -199,7 +199,7 @@ func (c *Client) Initialize(
 	}
 	// Add elicitation capability if handler is configured
 	if c.elicitationHandler != nil {
-		capabilities.Elicitation = &struct{}{}
+		capabilities.Elicitation = &mcp.ElicitationCapability{}
 	}
 
 	// Ensure we send a params object with all required fields
@@ -627,6 +627,10 @@ func (c *Client) handleElicitationRequestTransport(ctx context.Context, request 
 		if err := json.Unmarshal(paramsBytes, &params); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal params: %w", err)
 		}
+	}
+
+	if err := params.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid elicitation params: %w", err)
 	}
 
 	// Create the MCP request

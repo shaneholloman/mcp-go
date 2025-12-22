@@ -58,6 +58,9 @@ const (
 	// MethodElicitationCreate requests additional information from the user during interactions.
 	// https://modelcontextprotocol.io/docs/concepts/elicitation
 	MethodElicitationCreate MCPMethod = "elicitation/create"
+	
+	// MethodNotificationElicitationComplete notifies when a URL mode elicitation completes.
+	MethodNotificationElicitationComplete MCPMethod = "notifications/elicitation/complete"
 
 	// MethodListRoots requests roots list from the client during interactions.
 	// https://modelcontextprotocol.io/specification/2025-06-18/client/roots
@@ -415,8 +418,11 @@ const (
 
 // MCP error codes
 const (
-	// RESOURCE_NOT_FOUND indicates a requested resource was not found.
+	// RESOURCE_NOT_FOUND indicates that the requested resource was not found.
 	RESOURCE_NOT_FOUND = -32002
+
+	// URL_ELICITATION_REQUIRED is the error code for when URL elicitation is required.
+	URL_ELICITATION_REQUIRED = -32042
 )
 
 /* Empty result */
@@ -510,7 +516,7 @@ type ClientCapabilities struct {
 	// Present if the client supports sampling from an LLM.
 	Sampling *struct{} `json:"sampling,omitempty"`
 	// Present if the client supports elicitation requests from the server.
-	Elicitation *struct{} `json:"elicitation,omitempty"`
+	Elicitation *ElicitationCapability `json:"elicitation,omitempty"`
 	// Present if the client supports task-based execution.
 	Tasks *TasksCapability `json:"tasks,omitempty"`
 }
@@ -544,7 +550,7 @@ type ServerCapabilities struct {
 		ListChanged bool `json:"listChanged,omitempty"`
 	} `json:"tools,omitempty"`
 	// Present if the server supports elicitation requests to the client.
-	Elicitation *struct{} `json:"elicitation,omitempty"`
+	Elicitation *ElicitationCapability `json:"elicitation,omitempty"`
 	// Present if the server supports roots requests to the client.
 	Roots *struct{} `json:"roots,omitempty"`
 	// Present if the server supports task-based execution.
@@ -910,10 +916,49 @@ type ElicitationRequest struct {
 
 // ElicitationParams contains the parameters for an elicitation request.
 type ElicitationParams struct {
+	Meta *Meta `json:"_meta,omitempty"`
+	// Mode specifies the type of elicitation: "form" or "url". Defaults to "form".
+	Mode string `json:"mode,omitempty"`
 	// A human-readable message explaining what information is being requested and why.
 	Message string `json:"message"`
+
+	// Form mode fields
+
 	// A JSON Schema defining the expected structure of the user's response.
-	RequestedSchema any `json:"requestedSchema"`
+	RequestedSchema any `json:"requestedSchema,omitempty"`
+
+	// URL mode fields
+
+	// ElicitationID is a unique identifier for the elicitation request.
+	ElicitationID string `json:"elicitationId,omitempty"`
+	// URL is the URL to be opened by the user.
+	URL string `json:"url,omitempty"`
+}
+
+// Validate checks if the elicitation parameters are valid.
+func (p ElicitationParams) Validate() error {
+	mode := p.Mode
+	if mode == "" {
+		mode = ElicitationModeForm
+	}
+
+	switch mode {
+	case ElicitationModeForm:
+		if p.RequestedSchema == nil {
+			return fmt.Errorf("requestedSchema is required for form elicitation")
+		}
+	case ElicitationModeURL:
+		if p.ElicitationID == "" {
+			return fmt.Errorf("elicitationId is required for url elicitation")
+		}
+		if p.URL == "" {
+			return fmt.Errorf("url is required for url elicitation")
+		}
+	default:
+		return fmt.Errorf("invalid elicitation mode: %s", mode)
+	}
+
+	return nil
 }
 
 // ElicitationResult represents the result of an elicitation request.
@@ -1460,3 +1505,25 @@ func UnmarshalContent(data []byte) (Content, error) {
 		return nil, fmt.Errorf("unknown content type: %s", contentType)
 	}
 }
+
+// ElicitationCapability represents the elicitation capabilities of a client or server.
+type ElicitationCapability struct {
+	Form *struct{} `json:"form,omitempty"` // Supports form mode
+	URL  *struct{} `json:"url,omitempty"`  // Supports URL mode
+}
+
+// NewElicitationCompleteNotification creates a new elicitation complete notification.
+func NewElicitationCompleteNotification(elicitationID string) JSONRPCNotification {
+	return JSONRPCNotification{
+		JSONRPC: JSONRPC_VERSION,
+		Notification: Notification{
+			Method: string(MethodNotificationElicitationComplete),
+			Params: NotificationParams{
+				AdditionalFields: map[string]any{
+					"elicitationId": elicitationID,
+				},
+			},
+		},
+	}
+}
+

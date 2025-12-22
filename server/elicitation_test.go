@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
@@ -31,9 +32,11 @@ func (m *mockBasicSession) Initialized() bool {
 
 // mockElicitationSession implements SessionWithElicitation for testing
 type mockElicitationSession struct {
-	sessionID string
-	result    *mcp.ElicitationResult
-	err       error
+	sessionID   string
+	result      *mcp.ElicitationResult
+	err         error
+	lastRequest mcp.ElicitationRequest
+	notifyChan  chan mcp.JSONRPCNotification
 }
 
 func (m *mockElicitationSession) SessionID() string {
@@ -41,7 +44,11 @@ func (m *mockElicitationSession) SessionID() string {
 }
 
 func (m *mockElicitationSession) NotificationChannel() chan<- mcp.JSONRPCNotification {
-	return make(chan mcp.JSONRPCNotification, 1)
+	if m.notifyChan == nil {
+		// Buffer of 100 to avoid blocking during tests with multiple notifications
+		m.notifyChan = make(chan mcp.JSONRPCNotification, 100)
+	}
+	return m.notifyChan
 }
 
 func (m *mockElicitationSession) Initialize() {}
@@ -51,6 +58,7 @@ func (m *mockElicitationSession) Initialized() bool {
 }
 
 func (m *mockElicitationSession) RequestElicitation(ctx context.Context, request mcp.ElicitationRequest) (*mcp.ElicitationResult, error) {
+	m.lastRequest = request
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -72,13 +80,8 @@ func TestMCPServer_RequestElicitation_NoSession(t *testing.T) {
 
 	_, err := server.RequestElicitation(context.Background(), request)
 
-	if err == nil {
-		t.Error("expected error when no session available")
-	}
-
-	if !errors.Is(err, ErrNoActiveSession) {
-		t.Errorf("expected ErrNoActiveSession, got %v", err)
-	}
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNoActiveSession), "expected ErrNoActiveSession, got %v", err)
 }
 
 func TestMCPServer_RequestElicitation_SessionDoesNotSupportElicitation(t *testing.T) {
@@ -101,13 +104,8 @@ func TestMCPServer_RequestElicitation_SessionDoesNotSupportElicitation(t *testin
 
 	_, err := server.RequestElicitation(ctx, request)
 
-	if err == nil {
-		t.Error("expected error when session doesn't support elicitation")
-	}
-
-	if !errors.Is(err, ErrElicitationNotSupported) {
-		t.Errorf("expected ErrElicitationNotSupported, got %v", err)
-	}
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrElicitationNotSupported), "expected ErrElicitationNotSupported, got %v", err)
 }
 
 func TestMCPServer_RequestElicitation_Success(t *testing.T) {
@@ -146,28 +144,13 @@ func TestMCPServer_RequestElicitation_Success(t *testing.T) {
 
 	result, err := server.RequestElicitation(ctx, request)
 
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-
-	if result == nil {
-		t.Error("expected result, got nil")
-		return
-	}
-
-	if result.Action != mcp.ElicitationResponseActionAccept {
-		t.Errorf("expected response type %q, got %q", mcp.ElicitationResponseActionAccept, result.Action)
-	}
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, mcp.ElicitationResponseActionAccept, result.Action)
 
 	value, ok := result.Content.(map[string]any)
-	if !ok {
-		t.Error("expected value to be a map")
-		return
-	}
-
-	if value["projectName"] != "my-project" {
-		t.Errorf("expected projectName %q, got %q", "my-project", value["projectName"])
-	}
+	require.True(t, ok, "expected value to be a map")
+	assert.Equal(t, "my-project", value["projectName"])
 }
 
 func TestRequestElicitation(t *testing.T) {
@@ -226,7 +209,7 @@ func TestRequestElicitation(t *testing.T) {
 		},
 		{
 			name:    "session does not support elicitation",
-			session: &fakeSession{sessionID: "test-3"},
+			session: &mockBasicSession{sessionID: "test-3"},
 			request: mcp.ElicitationRequest{
 				Params: mcp.ElicitationParams{
 					Message:         "Need info",
@@ -255,8 +238,74 @@ func TestRequestElicitation(t *testing.T) {
 			assert.Equal(t, tt.expectedType, result.Action)
 
 			if tt.expectedType == mcp.ElicitationResponseActionAccept {
-				assert.NotNil(t, result.Action)
+				assert.NotNil(t, result.Content)
 			}
 		})
+	}
+}
+
+func TestRequestURLElicitation(t *testing.T) {
+	s := NewMCPServer("test", "1.0", WithElicitation())
+
+	mockSession := &mockElicitationSession{
+		sessionID: "test-url-1",
+		result: &mcp.ElicitationResult{
+			ElicitationResponse: mcp.ElicitationResponse{
+				Action: mcp.ElicitationResponseActionAccept,
+			},
+		},
+	}
+
+	ctx := context.Background()
+	_, err := s.RequestURLElicitation(ctx, mockSession, "id-123", "https://example.com/auth", "Please auth")
+	require.NoError(t, err)
+
+	assert.Equal(t, mcp.ElicitationModeURL, mockSession.lastRequest.Params.Mode)
+	assert.Equal(t, "id-123", mockSession.lastRequest.Params.ElicitationID)
+	assert.Equal(t, "https://example.com/auth", mockSession.lastRequest.Params.URL)
+
+	notifyChan := make(chan mcp.JSONRPCNotification, 1)
+	mockSessionWithChan := &mockElicitationSession{
+		sessionID:  "test-url-2",
+		notifyChan: notifyChan,
+	}
+
+	err = s.SendElicitationComplete(ctx, mockSessionWithChan, "id-123")
+	require.NoError(t, err)
+
+	select {
+	case notif := <-notifyChan:
+		assert.Equal(t, "notifications/elicitation/complete", notif.Method)
+		// Validate elicitationId is included in params
+		elicitationID, ok := notif.Params.AdditionalFields["elicitationId"]
+		assert.True(t, ok, "expected elicitationId in notification params")
+		assert.Equal(t, "id-123", elicitationID)
+	case <-time.After(100 * time.Millisecond):
+		t.Error("Expected notification not received")
+	}
+}
+
+func TestSendElicitationComplete_NoPriorRequest(t *testing.T) {
+	s := NewMCPServer("test", "1.0", WithElicitation())
+
+	notifyChan := make(chan mcp.JSONRPCNotification, 1)
+	mockSession := &mockElicitationSession{
+		sessionID:  "test-session-complete",
+		notifyChan: notifyChan,
+	}
+
+	// Call SendElicitationComplete directly without any prior request state
+	// This verifies the server can send completion notifications independently
+	err := s.SendElicitationComplete(context.Background(), mockSession, "independent-id-999")
+	require.NoError(t, err)
+
+	select {
+	case notif := <-notifyChan:
+		assert.Equal(t, "notifications/elicitation/complete", notif.Method)
+		elicitationID, ok := notif.Params.AdditionalFields["elicitationId"]
+		assert.True(t, ok, "expected elicitationId in notification params")
+		assert.Equal(t, "independent-id-999", elicitationID)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Expected notification was not received")
 	}
 }
