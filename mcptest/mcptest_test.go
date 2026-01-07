@@ -3,9 +3,11 @@ package mcptest_test
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/mcptest"
 	"github.com/mark3labs/mcp-go/server"
@@ -350,5 +352,62 @@ func TestServerWithResourceTemplate(t *testing.T) {
 	want := "Document readme.txt for user john"
 	if textContent.Text != want {
 		t.Errorf("Got %q, want %q", textContent.Text, want)
+	}
+}
+
+func TestListToolsWithHeader(t *testing.T) {
+	expectedHeaderValue := "test-header-value"
+	gotHeaderValue := ""
+
+	hooks := &server.Hooks{}
+	hooks.AddAfterListTools(func(ctx context.Context, id any, message *mcp.ListToolsRequest, result *mcp.ListToolsResult) {
+		gotHeaderValue = message.Header.Get("X-Test-Header")
+	})
+
+	// Create MCP server with capabilities
+	mcpServer := server.NewMCPServer(
+		"test-server",
+		"1.0.0",
+		server.WithToolCapabilities(true),
+		server.WithHooks(hooks),
+	)
+
+	testServer := server.NewTestStreamableHTTPServer(mcpServer)
+	defer testServer.Close()
+
+	initRequest := mcp.InitializeRequest{
+		Params: mcp.InitializeParams{
+			ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
+			ClientInfo: mcp.Implementation{
+				Name:    "test-client",
+				Version: "1.0.0",
+			},
+		},
+	}
+
+	client, err := client.NewStreamableHttpClient(testServer.URL)
+	if err != nil {
+		t.Fatalf("Create client failed %v", err)
+		return
+	}
+	ctx := context.Background()
+	if err := client.Start(ctx); err != nil {
+		t.Fatalf("Failed to start client: %v", err)
+		return
+	}
+
+	// Initialize
+	_, err = client.Initialize(ctx, initRequest)
+	if err != nil {
+		t.Fatalf("Failed to initialize: %v\n", err)
+	}
+
+	req := mcp.ListToolsRequest{Header: http.Header{"X-Test-Header": {expectedHeaderValue}}}
+	_, err = client.ListToolsByPage(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Failed to ListTools: %v\n", err)
+	}
+	if expectedHeaderValue != gotHeaderValue {
+		t.Fatalf("Expected value is %s, got %s", expectedHeaderValue, gotHeaderValue)
 	}
 }
