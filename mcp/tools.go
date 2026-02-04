@@ -58,9 +58,10 @@ type CallToolRequest struct {
 }
 
 type CallToolParams struct {
-	Name      string `json:"name"`
-	Arguments any    `json:"arguments,omitempty"`
-	Meta      *Meta  `json:"_meta,omitempty"`
+	Name      string      `json:"name"`
+	Arguments any         `json:"arguments,omitempty"`
+	Meta      *Meta       `json:"_meta,omitempty"`
+	Task      *TaskParams `json:"task,omitempty"`
 }
 
 // GetArguments returns the Arguments as map[string]any for backward compatibility
@@ -553,6 +554,24 @@ type ToolListChangedNotification struct {
 	Notification
 }
 
+// TaskSupport indicates how a tool supports task augmentation.
+type TaskSupport string
+
+const (
+	// TaskSupportForbidden means the tool cannot be invoked as a task (default).
+	TaskSupportForbidden TaskSupport = "forbidden"
+	// TaskSupportOptional means the tool can be invoked as a task or normally.
+	TaskSupportOptional TaskSupport = "optional"
+	// TaskSupportRequired means the tool must be invoked as a task.
+	TaskSupportRequired TaskSupport = "required"
+)
+
+// ToolExecution describes execution behavior for a tool.
+type ToolExecution struct {
+	// TaskSupport indicates whether the tool supports task augmentation.
+	TaskSupport TaskSupport `json:"taskSupport,omitempty"`
+}
+
 // Tool represents the definition for a tool the client can call.
 type Tool struct {
 	// Meta is a metadata object that is reserved by MCP for storing additional information.
@@ -575,6 +594,8 @@ type Tool struct {
 	DeferLoading bool `json:"defer_loading,omitempty"`
 	// Icons provides visual identifiers for the tool
 	Icons []Icon `json:"icons,omitempty"`
+	// Execution describes execution behavior for the tool
+	Execution *ToolExecution `json:"execution,omitempty"`
 }
 
 // GetName returns the name of the tool.
@@ -628,6 +649,10 @@ func (t Tool) MarshalJSON() ([]byte, error) {
 
 	if t.Icons != nil {
 		m["icons"] = t.Icons
+	}
+
+	if t.Execution != nil {
+		m["execution"] = t.Execution
 	}
 
 	return json.Marshal(m)
@@ -815,6 +840,18 @@ func WithInputSchema[T any]() ToolOption {
 func WithToolIcons(icons ...Icon) ToolOption {
 	return func(t *Tool) {
 		t.Icons = icons
+	}
+}
+
+// WithTaskSupport sets the task support mode for the tool.
+// It configures whether the tool can be invoked as a task (asynchronously).
+// Valid values are TaskSupportForbidden (default), TaskSupportOptional, or TaskSupportRequired.
+func WithTaskSupport(support TaskSupport) ToolOption {
+	return func(t *Tool) {
+		if t.Execution == nil {
+			t.Execution = &ToolExecution{}
+		}
+		t.Execution.TaskSupport = support
 	}
 }
 
