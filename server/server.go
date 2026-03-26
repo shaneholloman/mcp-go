@@ -224,13 +224,13 @@ func WithPaginationLimit(limit int) ServerOption {
 
 // serverCapabilities defines the supported features of the MCP server
 type serverCapabilities struct {
-	tools       *toolCapabilities
-	resources   *resourceCapabilities
-	prompts     *promptCapabilities
-	logging     *bool
-	sampling    *bool
-	elicitation *bool
-	roots       *bool
+	tools        *toolCapabilities
+	resources    *resourceCapabilities
+	prompts      *promptCapabilities
+	logging      *bool
+	sampling     *bool
+	elicitation  *bool
+	roots        *bool
 	tasks        *taskCapabilities
 	completions  *bool
 	experimental map[string]any
