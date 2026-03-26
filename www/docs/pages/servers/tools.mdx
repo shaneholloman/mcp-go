@@ -248,7 +248,7 @@ func listAssetsHandler(ctx context.Context, req mcp.CallToolRequest, args struct
 
 ### Schema Tags Reference
 
-MCP-Go uses the `jsonschema` struct tag for schema generation:
+MCP-Go uses the [`google/jsonschema-go`](https://github.com/google/jsonschema-go) library with the `jsonschema` struct tag for schema generation:
 
 ```go
 type ExampleStruct struct {
@@ -265,6 +265,15 @@ type ExampleStruct struct {
     Status string `json:"status,omitempty" jsonschema:"Current status"`
 }
 ```
+
+:::info Migration Note
+MCP-Go migrated from `invopop/jsonschema` to `google/jsonschema-go`. If you are upgrading from an older version, note these breaking changes:
+
+- **Description tag**: Changed from `jsonschema_description:"text"` to `jsonschema:"text"`
+- **Required fields**: The `jsonschema:"required"` tag is no longer supported. Fields without `omitempty` in their `json` tag are automatically required.
+- **Validation constraints**: Tags like `jsonschema:"enum=..."`, `jsonschema:"minimum=..."` are no longer supported in struct tags. Use `mcp.WithRawInputSchema()` for these constraints or define them with the builder API (`mcp.WithString`, `mcp.WithNumber`, etc.).
+- **Additional properties**: `additionalProperties: false` is now automatically included in generated schemas.
+:::
 
 ### Manual Structured Results
 
