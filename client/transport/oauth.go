@@ -410,6 +410,7 @@ func (h *OAuthHandler) getServerMetadata(ctx context.Context) (*AuthServerMetada
 			}
 			h.fetchMetadataFromURL(ctx, authMetadataURL)
 			if h.serverMetadata != nil {
+				h.metadataFetchErr = nil
 				return
 			}
 			// If that also fails, fall back to default endpoints
@@ -419,6 +420,7 @@ func (h *OAuthHandler) getServerMetadata(ctx context.Context) (*AuthServerMetada
 				return
 			}
 			h.serverMetadata = metadata
+			h.metadataFetchErr = nil
 			return
 		}
 
@@ -447,6 +449,7 @@ func (h *OAuthHandler) getServerMetadata(ctx context.Context) (*AuthServerMetada
 				return
 			}
 			h.serverMetadata = metadata
+			h.metadataFetchErr = nil
 			return
 		}
 
@@ -461,6 +464,7 @@ func (h *OAuthHandler) getServerMetadata(ctx context.Context) (*AuthServerMetada
 		}
 		h.fetchMetadataFromURL(ctx, authMetadataURL)
 		if h.serverMetadata != nil {
+			h.metadataFetchErr = nil
 			return
 		}
 
@@ -472,6 +476,7 @@ func (h *OAuthHandler) getServerMetadata(ctx context.Context) (*AuthServerMetada
 		}
 		h.fetchMetadataFromURL(ctx, openidMetadataURL)
 		if h.serverMetadata != nil {
+			h.metadataFetchErr = nil
 			return
 		}
 
@@ -482,6 +487,7 @@ func (h *OAuthHandler) getServerMetadata(ctx context.Context) (*AuthServerMetada
 			return
 		}
 		h.serverMetadata = metadata
+		h.metadataFetchErr = nil
 	})
 
 	if h.metadataFetchErr != nil {
