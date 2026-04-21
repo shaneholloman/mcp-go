@@ -248,9 +248,233 @@ func (c *StreamableHTTP) SetProtocolVersion(version string) {
 // ErrOAuthAuthorizationRequired is a sentinel error for OAuth authorization required
 var ErrOAuthAuthorizationRequired = errors.New("no valid token available, authorization required")
 
+// ErrAuthorizationRequired is a sentinel error for authorization required (401)
+var ErrAuthorizationRequired = errors.New("authorization required")
+
+// parseAuthParams parses the auth-params from a WWW-Authenticate header value
+// per RFC 7235. It skips the auth-scheme (first token) and returns a map of
+// key=value pairs. Values may be tokens or quoted-strings (with backslash
+// escaping per RFC 7230 §3.2.6).
+func parseAuthParams(header string) map[string]string {
+	params := make(map[string]string)
+
+	// Skip leading whitespace
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return params
+	}
+
+	// Skip the auth-scheme (first token before space)
+	_, rest, found := strings.Cut(header, " ")
+	if !found {
+		return params // auth-scheme only, no params
+	}
+	rest = strings.TrimSpace(rest)
+
+	for rest != "" {
+		rest = strings.TrimSpace(rest)
+		if rest == "" {
+			break
+		}
+
+		// Parse key
+		eqIdx := strings.IndexByte(rest, '=')
+		if eqIdx == -1 {
+			break
+		}
+		key := strings.TrimSpace(rest[:eqIdx])
+		rest = strings.TrimLeft(rest[eqIdx+1:], " \t")
+
+		// Parse value: quoted-string or token
+		var value string
+		if len(rest) > 0 && rest[0] == '"' {
+			value, rest = parseQuotedString(rest)
+		} else {
+			// Token value: ends at comma, space, or end of string
+			end := strings.IndexAny(rest, ", \t")
+			if end == -1 {
+				value = rest
+				rest = ""
+			} else {
+				value = rest[:end]
+				rest = rest[end:]
+			}
+		}
+
+		params[key] = value
+
+		// Skip comma separator
+		rest = strings.TrimSpace(rest)
+		if len(rest) > 0 && rest[0] == ',' {
+			rest = rest[1:]
+		}
+	}
+
+	return params
+}
+
+// parseQuotedString parses a quoted-string value per RFC 7230 §3.2.6.
+// Input must start with a double-quote. Returns the unescaped value and
+// the remaining unparsed input after the closing quote.
+func parseQuotedString(s string) (value, rest string) {
+	if len(s) == 0 || s[0] != '"' {
+		return "", s
+	}
+	s = s[1:] // skip opening quote
+
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			if i+1 < len(s) {
+				b.WriteByte(s[i+1])
+				i++ // skip escaped char
+			}
+		case '"':
+			return b.String(), s[i+1:]
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	// No closing quote found; return what we have
+	return b.String(), ""
+}
+
+// extractResourceMetadataURL extracts the resource_metadata parameter from WWW-Authenticate headers
+// per RFC9728 Section 5.1. Scans all provided header values since a response may contain multiple
+// WWW-Authenticate headers (RFC 9110). Returns empty string if not found.
+// Example: Bearer resource_metadata="https://resource.example.com/.well-known/oauth-protected-resource"
+func extractResourceMetadataURL(wwwAuthHeaders []string) string {
+	for _, header := range wwwAuthHeaders {
+		for _, u := range extractResourceMetadataURLs(header) {
+			if u != "" {
+				return u
+			}
+		}
+	}
+	return ""
+}
+
+// extractResourceMetadataURLs returns every resource_metadata parameter
+// value from a single WWW-Authenticate header value per RFC 9728 §5.1,
+// in the order they appear. Returns an empty slice when the header is
+// empty or no such parameters are present. Parameter names are matched
+// case-insensitively per RFC 9110 §11.2; both quoted-string and token
+// value forms are accepted. Multiple occurrences are possible when a
+// single header value contains several Bearer challenges each carrying
+// their own resource_metadata — an attacker-controlled first candidate
+// must not mask a legitimate later one.
+func extractResourceMetadataURLs(header string) []string {
+	const target = "resource_metadata"
+	var out []string
+	i := 0
+	for i < len(header) {
+		// Advance to the next token start.
+		for i < len(header) && !isAuthTokenChar(header[i]) {
+			i++
+		}
+		nameStart := i
+		for i < len(header) && isAuthTokenChar(header[i]) {
+			i++
+		}
+		name := header[nameStart:i]
+		// Skip optional whitespace between the name and '='.
+		for i < len(header) && (header[i] == ' ' || header[i] == '\t') {
+			i++
+		}
+		if i >= len(header) || header[i] != '=' {
+			// Name was a scheme token (e.g. "Bearer"), not a parameter.
+			continue
+		}
+		// Skip '=' and optional whitespace.
+		i++
+		for i < len(header) && (header[i] == ' ' || header[i] == '\t') {
+			i++
+		}
+		value, next, ok := parseAuthParamValue(header, i)
+		i = next
+		if !ok {
+			continue
+		}
+		if value != "" && strings.EqualFold(name, target) {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+// parseAuthParamValue reads a single WWW-Authenticate parameter value
+// starting at offset i: a quoted-string (with backslash escapes) when the
+// first byte is '"', otherwise a bare token. It returns the decoded
+// value, the index of the first byte after it, and whether the value
+// was well-formed. Truncated quoted strings (no closing '"') and lone
+// trailing backslashes yield ok=false so malformed input is rejected
+// rather than producing a partial value.
+func parseAuthParamValue(s string, i int) (string, int, bool) {
+	if i >= len(s) {
+		return "", i, false
+	}
+	if s[i] == '"' {
+		i++
+		var b strings.Builder
+		for i < len(s) {
+			c := s[i]
+			if c == '\\' {
+				if i+1 >= len(s) {
+					// Lone trailing backslash — the quoted string was
+					// truncated mid-escape, so the value is malformed.
+					return "", i + 1, false
+				}
+				b.WriteByte(s[i+1])
+				i += 2
+				continue
+			}
+			if c == '"' {
+				return b.String(), i + 1, true
+			}
+			b.WriteByte(c)
+			i++
+		}
+		// Reached end of input without a closing '"'.
+		return "", i, false
+	}
+	start := i
+	for i < len(s) && isAuthTokenChar(s[i]) {
+		i++
+	}
+	return s[start:i], i, i > start
+}
+
+// isAuthTokenChar reports whether c is a valid RFC 9110 §5.6.2 token
+// character — the character class used for scheme and parameter names in
+// WWW-Authenticate.
+func isAuthTokenChar(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	}
+	return strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0
+}
+
+// AuthorizationRequiredError is returned when a 401 Unauthorized response is received.
+// It contains the protected resource metadata URL from the WWW-Authenticate header if present.
+type AuthorizationRequiredError struct {
+	ResourceMetadataURL string // Extracted from WWW-Authenticate header per RFC9728
+}
+
+func (e *AuthorizationRequiredError) Error() string {
+	return ErrAuthorizationRequired.Error()
+}
+
+func (e *AuthorizationRequiredError) Unwrap() error {
+	return ErrAuthorizationRequired
+}
+
 // OAuthAuthorizationRequiredError is returned when OAuth authorization is required
+// and an OAuth handler is available.
 type OAuthAuthorizationRequiredError struct {
 	Handler *OAuthHandler
+	AuthorizationRequiredError
 }
 
 func (e *OAuthAuthorizationRequiredError) Error() string {
@@ -302,12 +526,30 @@ func (c *StreamableHTTP) SendRequest(
 
 		// Handle unauthorized error
 		if resp.StatusCode == http.StatusUnauthorized {
+			// Extract discovered metadata URL per RFC9728
+			metadataURL := extractResourceMetadataURL(resp.Header.Values("WWW-Authenticate"))
+
+			// Feed discovered URL back to OAuthHandler so next auth attempt uses it.
+			// HandleUnauthorizedResponse applies RFC 9728 origin validation — a
+			// compromised resource advertising a cross-origin PRM URL is ignored.
+			if c.oauthHandler != nil {
+				c.oauthHandler.HandleUnauthorizedResponse(resp)
+			}
+
+			// If OAuth handler exists, return OAuth-specific error
 			if c.oauthHandler != nil {
 				return nil, &OAuthAuthorizationRequiredError{
 					Handler: c.oauthHandler,
+					AuthorizationRequiredError: AuthorizationRequiredError{
+						ResourceMetadataURL: metadataURL,
+					},
 				}
 			}
-			return nil, ErrUnauthorized
+
+			// No OAuth handler, return base authorization error
+			return nil, &AuthorizationRequiredError{
+				ResourceMetadataURL: metadataURL,
+			}
 		}
 
 		// Per the MCP spec's backwards compatibility section: if an initialize
@@ -412,6 +654,9 @@ func (c *StreamableHTTP) sendHTTP(
 			if errors.Is(err, ErrOAuthAuthorizationRequired) {
 				return nil, &OAuthAuthorizationRequiredError{
 					Handler: c.oauthHandler,
+					AuthorizationRequiredError: AuthorizationRequiredError{
+						ResourceMetadataURL: "", // No response available in this code path
+					},
 				}
 			}
 			return nil, fmt.Errorf("failed to get authorization header: %w", err)
@@ -592,12 +837,30 @@ func (c *StreamableHTTP) SendNotification(ctx context.Context, notification mcp.
 	case http.StatusOK, http.StatusAccepted, http.StatusNoContent:
 		return nil
 	case http.StatusUnauthorized:
+		// Extract discovered metadata URL per RFC9728
+		metadataURL := extractResourceMetadataURL(resp.Header.Values("WWW-Authenticate"))
+
+		// Feed discovered URL back to OAuthHandler so next auth attempt uses it.
+		// HandleUnauthorizedResponse applies RFC 9728 origin validation — a
+		// compromised resource advertising a cross-origin PRM URL is ignored.
+		if c.oauthHandler != nil {
+			c.oauthHandler.HandleUnauthorizedResponse(resp)
+		}
+
+		// If OAuth handler exists, return OAuth-specific error
 		if c.oauthHandler != nil {
 			return &OAuthAuthorizationRequiredError{
 				Handler: c.oauthHandler,
+				AuthorizationRequiredError: AuthorizationRequiredError{
+					ResourceMetadataURL: metadataURL,
+				},
 			}
 		}
-		return ErrUnauthorized
+
+		// No OAuth handler, return base authorization error
+		return &AuthorizationRequiredError{
+			ResourceMetadataURL: metadataURL,
+		}
 	default:
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf(
