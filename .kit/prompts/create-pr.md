@@ -12,7 +12,7 @@ Open a GitHub pull request for the current branch, filling out the repository's 
 2. **Gather context**:
    - `git log origin/main..HEAD --oneline` — list of commits going into the PR
    - `git diff origin/main...HEAD --stat` then `git diff origin/main...HEAD` — read the actual changes
-   - Identify the linked issue (from commit messages, branch name, or `$@`) — capture as `Fixes #N` if applicable
+   - Identify the linked issue (from commit messages, branch name, or extra user input: $@) — capture as `Fixes #N` if applicable
 3. **Locate the PR template**:
    - Check `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE.md`, or `docs/pull_request_template.md`
    - If none exists, use a minimal `## Description` / `## Type of Change` / `## Checklist` structure

@@ -8,7 +8,7 @@ mention them, and update each one — grounded in the actual diff, not guesses.
 ## Steps
 
 1. **Identify the change**:
-   - If `$@` names a commit / PR / branch / topic, use that as the focus
+   - If the user input ($@) names a commit / PR / branch / topic, use that as the focus
    - Otherwise inspect `git log origin/main..HEAD --oneline` and `git diff origin/main...HEAD --stat` to discover what shipped on the current branch
    - Read the actual diff (`git diff origin/main...HEAD`) — never document features that aren't in the code
 
