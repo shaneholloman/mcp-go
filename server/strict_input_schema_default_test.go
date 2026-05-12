@@ -191,9 +191,9 @@ type fakeSessionWithTools struct {
 	tools map[string]ServerTool
 }
 
-func (f *fakeSessionWithTools) SessionID() string                              { return f.id }
+func (f *fakeSessionWithTools) SessionID() string                                   { return f.id }
 func (f *fakeSessionWithTools) NotificationChannel() chan<- mcp.JSONRPCNotification { return nil }
-func (f *fakeSessionWithTools) Initialize()                                    { f.ready = true }
-func (f *fakeSessionWithTools) Initialized() bool                              { return f.ready }
-func (f *fakeSessionWithTools) GetSessionTools() map[string]ServerTool         { return f.tools }
-func (f *fakeSessionWithTools) SetSessionTools(tools map[string]ServerTool)    { f.tools = tools }
+func (f *fakeSessionWithTools) Initialize()                                         { f.ready = true }
+func (f *fakeSessionWithTools) Initialized() bool                                   { return f.ready }
+func (f *fakeSessionWithTools) GetSessionTools() map[string]ServerTool              { return f.tools }
+func (f *fakeSessionWithTools) SetSessionTools(tools map[string]ServerTool)         { f.tools = tools }

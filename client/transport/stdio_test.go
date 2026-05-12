@@ -588,7 +588,6 @@ func (r errReader) Read(_ []byte) (int, error) {
 	return 0, r.err
 }
 
-
 func TestStdio_StartGuaranteesReaderReady(t *testing.T) {
 	stdoutReader, stdoutWriter := io.Pipe()
 	stdinReader, stdinWriter := io.Pipe()
