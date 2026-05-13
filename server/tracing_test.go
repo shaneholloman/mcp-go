@@ -63,4 +63,3 @@ func TestWithTracer_RegistersToolMiddleware(t *testing.T) {
 	assert.Contains(t, tr.spans, "mcp.tools/call")
 	assert.Contains(t, tr.spans, "tool.echo")
 }
-

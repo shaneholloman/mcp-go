@@ -95,5 +95,5 @@ func (noopSpan) End()                         {}
 
 type noopPropagator struct{}
 
-func (noopPropagator) Inject(context.Context, http.Header)                       {}
+func (noopPropagator) Inject(context.Context, http.Header)                        {}
 func (noopPropagator) Extract(ctx context.Context, _ http.Header) context.Context { return ctx }

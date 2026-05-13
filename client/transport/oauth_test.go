@@ -2411,9 +2411,9 @@ func TestOAuthHandler_GetServerMetadata_DoesNotHoldLockAcrossHTTP(t *testing.T) 
 func TestOAuthHandler_MetadataDiscovery_SendsLatestProtocolVersion(t *testing.T) {
 	t.Run("ProtectedResourceDiscovery", func(t *testing.T) {
 		var (
-			mu             sync.Mutex
-			seenByPath     = map[string]string{}
-			serverURL      string
+			mu         sync.Mutex
+			seenByPath = map[string]string{}
+			serverURL  string
 		)
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

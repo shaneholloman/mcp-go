@@ -33,10 +33,10 @@ func TestSessionHookGoroutine_PanicsWithoutRecovery(t *testing.T) {
 
 	// Create a mock session with a full notification channel (to trigger the error path)
 	session := &mockSessionForPanic{
-		sessionID:    "test-session-panic",
-		initialized:  true,
-		notifyChan:   make(chan mcp.JSONRPCNotification), // unbuffered = immediately blocks
-		doneOnce:     sync.Once{},
+		sessionID:   "test-session-panic",
+		initialized: true,
+		notifyChan:  make(chan mcp.JSONRPCNotification), // unbuffered = immediately blocks
+		doneOnce:    sync.Once{},
 	}
 
 	// Register the session
@@ -196,15 +196,17 @@ type mockSessionForPanic struct {
 	doneOnce    sync.Once
 }
 
-func (m *mockSessionForPanic) SessionID() string                              { return m.sessionID }
-func (m *mockSessionForPanic) Initialized() bool                              { return m.initialized }
-func (m *mockSessionForPanic) NotificationChannel() chan<- mcp.JSONRPCNotification { return m.notifyChan }
-func (m *mockSessionForPanic) Initialize()                                    {}
-func (m *mockSessionForPanic) GetLoggingLevel() mcp.LoggingLevel              { return mcp.LoggingLevelError }
-func (m *mockSessionForPanic) SetLoggingLevel(level mcp.LoggingLevel)         {}
-func (m *mockSessionForPanic) GetClientInfo() *mcp.Implementation             { return nil }
-func (m *mockSessionForPanic) SetClientInfo(info mcp.Implementation)          {}
-func (m *mockSessionForPanic) GetClientCapabilities() *mcp.ClientCapabilities { return nil }
+func (m *mockSessionForPanic) SessionID() string { return m.sessionID }
+func (m *mockSessionForPanic) Initialized() bool { return m.initialized }
+func (m *mockSessionForPanic) NotificationChannel() chan<- mcp.JSONRPCNotification {
+	return m.notifyChan
+}
+func (m *mockSessionForPanic) Initialize()                                       {}
+func (m *mockSessionForPanic) GetLoggingLevel() mcp.LoggingLevel                 { return mcp.LoggingLevelError }
+func (m *mockSessionForPanic) SetLoggingLevel(level mcp.LoggingLevel)            {}
+func (m *mockSessionForPanic) GetClientInfo() *mcp.Implementation                { return nil }
+func (m *mockSessionForPanic) SetClientInfo(info mcp.Implementation)             {}
+func (m *mockSessionForPanic) GetClientCapabilities() *mcp.ClientCapabilities    { return nil }
 func (m *mockSessionForPanic) SetClientCapabilities(caps mcp.ClientCapabilities) {}
 
 type mockSessionForPanicWithTools struct {
